@@ -37,6 +37,7 @@ lazy_static! {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    map_tree: BTreeMap<VirtPageNum, FrameTracker>,
 }
 
 impl MemorySet {
@@ -45,6 +46,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            map_tree: BTreeMap::new(),
         }
     }
     /// Get the page table token
@@ -261,6 +263,75 @@ impl MemorySet {
         } else {
             false
         }
+    }
+    ///USER
+    pub fn mmap(&mut self,start:usize,len:usize,port:usize)->isize{
+        if port==0 || port>8{
+            return -1 ;
+        }
+        let va_start:VirtAddr=start.into();
+        if !va_start.aligned() {
+            debug!("unmap fail don't aligned");
+            return -1;
+        }
+        let a = 0;
+        let mut va_start:VirtPageNum=va_start.floor();
+        let mut flags = PTEFlags::from_bits(a as u8).unwrap();
+        if port & 0b0000_0001 != 0 {
+            flags |= PTEFlags::R;
+        }
+
+        if port & 0b0000_0010 != 0 {
+            flags |= PTEFlags::W;
+        }
+
+        if port & 0b0000_0100 != 0 {
+            flags |= PTEFlags::X;
+        }
+        
+        flags |= PTEFlags::U;
+        flags |= PTEFlags::V;
+
+        let va_end: VirtAddr=(start+len).into();
+        let va_end: VirtPageNum=va_end.ceil();
+        
+        while va_start.0!=va_end.0{
+            if let Some(pte) = self.page_table.translate(va_start) {
+                if pte.is_valid() {
+                    debug!("mmap found exit va_start {}", va_start.0);
+                    return -1;
+                }
+            }
+            if let Some(ppn) = frame_alloc() {
+                self.page_table.map(va_start, ppn.ppn, flags);
+                self.map_tree.insert(va_start, ppn);
+            } else {
+                return -1;
+            }
+            va_start.step();
+        }
+        0
+    }
+    ///USER
+    pub fn ummap(&mut self,start: usize,len:usize)->isize{
+        let va_start:VirtAddr=start.into();
+        let mut va_start:VirtPageNum=va_start.floor();
+        let va_end:VirtAddr=(start+len).into();
+        let va_end:VirtPageNum=va_end.ceil();
+        while va_start.0!=va_end.0 {
+            if let Some(item) = self.page_table.translate(va_start) {
+                if !item.is_valid() {
+                    debug!("unmap on no map vpn");
+                    return -1;
+                } 
+            } else {
+                    return -1;
+            }
+            self.page_table.unmap(va_start);
+            self.map_tree.remove(&va_start);
+            va_start.step();
+        }
+        0   
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory

@@ -13,7 +13,7 @@ mod context;
 mod switch;
 #[allow(clippy::module_inception)]
 mod task;
-
+use crate::timer::get_time_ms;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
@@ -79,6 +79,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -140,6 +141,9 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            if inner.tasks[next].start_time == 0{
+                inner.tasks[next].start_time = get_time_ms();
+            }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -153,8 +157,49 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    ///add syscall_times
+    fn add_syscall_times(&self,id:usize){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[id] += 1;
+    }
+    ///get runtime  
+    fn get_runtime(&self)->usize{
+        let  inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        get_time_ms() - inner.tasks[current].start_time
+    }
+    ///get_syscall_times()
+    fn get_syscall_times(&self)->[u32;500]{
+        let  inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+       inner.tasks[current].syscall_times.clone()
+    }
+    ///
+    pub fn user_map(&self,start:usize,len:usize,port:usize)->isize{
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.mmap(start, len, port)
+    }
+    ///
+    pub fn user_munmap(&self,start:usize,len:usize)->isize{
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.ummap(start, len)
+    }
 }
-
+///add syscall_times
+pub fn add_syscall_times(id:usize){
+    TASK_MANAGER.add_syscall_times(id);
+}
+///get runtime  
+pub fn get_runtime()->usize{
+    TASK_MANAGER.get_runtime()
+}
+///get_syscall_times
+pub fn get_syscall_times()->[u32;500]{
+    TASK_MANAGER.get_syscall_times()
+}
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
